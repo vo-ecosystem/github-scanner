@@ -19,6 +19,7 @@ class GitHubOrgScanner:
         if token:
             self.headers["Authorization"] = f"token {token}"
         self.one_year_ago = datetime.now() - timedelta(days=365)
+        self.old_pr_threshold_days = int(os.environ.get('OLD_PR_THRESHOLD_DAYS', '30'))
         self.report_data = []
     
     def make_request(self, url):
@@ -70,19 +71,56 @@ class GitHubOrgScanner:
         url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/branches?per_page=100"
         return self.make_request(url)
     
-    def get_pr_branches(self, repo_name):
-        """Get branches that have associated PRs."""
+    def get_all_pr_branches(self, repo_name):
+        """Get branches that have associated PRs (open, closed, merged)."""
         pr_branches = set()
         
-        # Check open PRs
-        for state in ['open', 'closed']:
-            url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/pulls?state={state}&per_page=100"
-            prs = self.make_request(url)
-            for pr in prs:
-                if pr.get('head', {}).get('ref'):
-                    pr_branches.add(pr['head']['ref'])
+        # Get all PRs (open and closed) in one request - more efficient
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/pulls?state=all&per_page=100"
+        prs = self.make_request(url)
+        for pr in prs:
+            if pr.get('head', {}).get('ref'):
+                pr_branches.add(pr['head']['ref'])
         
         return pr_branches
+    
+    def get_open_pr_branches(self, repo_name):
+        """Get branches that have open PRs only."""
+        open_pr_branches = set()
+        
+        # Get only open PRs
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/pulls?state=open&per_page=100"
+        prs = self.make_request(url)
+        for pr in prs:
+            if pr.get('head', {}).get('ref'):
+                open_pr_branches.add(pr['head']['ref'])
+        
+        return open_pr_branches
+    
+    def get_default_branch(self, repo_name):
+        """Get the default branch for a repository."""
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}"
+        try:
+            response = requests.get(url, headers=self.headers, timeout=30)
+            if response.status_code == 200:
+                repo_data = response.json()
+                return repo_data.get('default_branch', 'main')
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to get default branch for {repo_name}: {e}", file=sys.stderr)
+        return 'main'  # fallback
+    
+    def get_protected_branches(self, repo_name):
+        """Get protected branches for a repository."""
+        protected_branches = set()
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/branches"
+        try:
+            branches = self.make_request(url)
+            for branch in branches:
+                if branch.get('protected', False):
+                    protected_branches.add(branch['name'])
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to get protected branches for {repo_name}: {e}", file=sys.stderr)
+        return protected_branches
     
     def analyze_repo(self, repo):
         """Analyze a single repository."""
@@ -104,19 +142,24 @@ class GitHubOrgScanner:
         branches = self.get_branches(repo_name)
         branch_names = {b['name'] for b in branches}
         
-        # Get branches with PRs
-        pr_branches = self.get_pr_branches(repo_name)
+        # Get branches with open PRs only (branches with closed/merged PRs are considered orphaned)
+        open_pr_branches = self.get_open_pr_branches(repo_name)
         
-        # Calculate branches without PRs (exclude main/master)
-        branches_without_prs = branch_names - pr_branches - {'main', 'master', 'develop'}
+        # Get default and protected branches to exclude
+        default_branch = self.get_default_branch(repo_name)
+        protected_branches = self.get_protected_branches(repo_name)
+        
+        # Calculate orphaned branches (exclude default and protected branches)
+        excluded_branches = {default_branch} | protected_branches
+        orphaned_branches = branch_names - open_pr_branches - excluded_branches
         
         return {
             'name': repo_name,
             'url': repo['html_url'],
             'open_prs': sorted(pr_info, key=lambda x: x['days_old'], reverse=True),
             'total_branches': len(branches),
-            'branches_without_prs_count': len(branches_without_prs),
-            'stale_branches': list(branches_without_prs)[:5]
+            'branches_without_prs_count': len(orphaned_branches),
+            'stale_branches': list(orphaned_branches)
         }
     
     def generate_report(self):
@@ -158,47 +201,54 @@ class GitHubOrgScanner:
             'repos': []
         }
         
-        for repo in active_repos:
+        for i, repo in enumerate(active_repos, 1):
+            print(f"\rAnalyzing repos: {i}/{len(active_repos)} - {repo['name']}", end='', flush=True)
             result = self.analyze_repo(repo)
             summary['repos'].append(result)
             summary['total_open_prs'] += len(result['open_prs'])
             
             # Check for issues
             has_issues = (len(result['open_prs']) > 3 or 
-                         any(pr['days_old'] > 30 for pr in result['open_prs']) or
-                         result['branches_without_prs_count'] > 10)
+                         any(pr['days_old'] > self.old_pr_threshold_days for pr in result['open_prs']) or
+                         result['branches_without_prs_count'] > 0)
             
             if has_issues:
                 summary['repos_with_issues'] += 1
             
             # Console output for problematic repos only
             if has_issues:
+                # Clear progress line before showing problematic repo
+                print(f"\r{' ' * 80}\r", end='')  # Clear the progress line
                 print(f"⚠️  {result['name']}")
                 print(f"   Branches: {result['total_branches']} ({result['branches_without_prs_count']} orphaned)")
                 
                 if result['open_prs']:
-                    old_prs = [pr for pr in result['open_prs'] if pr['days_old'] > 30]
+                    old_prs = [pr for pr in result['open_prs'] if pr['days_old'] > self.old_pr_threshold_days]
                     if old_prs:
-                        print(f"   Old PRs (>30d): {len(old_prs)}")
-                        for pr in old_prs[:3]:
-                            print(f"     • PR #{pr['number']}: {pr['days_old']}d old")
+                        print(f"   Old PRs (>{self.old_pr_threshold_days}d): {len(old_prs)}")
                 
                 print()
+        
+        # Clear any remaining progress line
+        print(f"\r{' ' * 80}\r", end='')
         
         # Summary
         print(f"\n{'='*60}")
         print(f"SUMMARY:")
-        print(f"• Repos with potential issues: {summary['repos_with_issues']}/{len(active_repos)}")
+        print(f"• Total repos: {summary['total_repos']}")
+        print(f"• Active repos (last year): {summary['active_repos']}")
+        print(f"• Repos with issues: {summary['repos_with_issues']}")
         print(f"• Total open PRs: {summary['total_open_prs']}")
         print(f"• Repos needing attention listed above")
         print(f"{'='*60}\n")
         
         # Save JSON report
-        report_path = f"/app/reports/scan_{self.org_name}_{timestamp}.json"
-        os.makedirs("/app/reports", exist_ok=True)
+        report_path = f"./reports/scan_{self.org_name}_{timestamp}.json"
+        os.makedirs("./reports", exist_ok=True)
         
         with open(report_path, 'w') as f:
             json.dump(summary, f, indent=2, default=str)
+            f.write('\n')  # Add blank line at end
         
         print(f"Full report saved: {report_path}")
 
