@@ -20,6 +20,7 @@ class GitHubOrgScanner:
             self.headers["Authorization"] = f"token {token}"
         self.one_year_ago = datetime.now() - timedelta(days=365)
         self.old_pr_threshold_days = int(os.environ.get('OLD_PR_THRESHOLD_DAYS', '30'))
+        self.single_repo = os.environ.get('GITHUB_REPO')  # If set, scan only this repo
         self.report_data = []
     
     def make_request(self, url):
@@ -45,8 +46,25 @@ class GitHubOrgScanner:
         
         return all_items
     
+    def get_single_repo(self, repo_name):
+        """Get a single repository by name."""
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}"
+        try:
+            response = requests.get(url, headers=self.headers, timeout=30)
+            if response.status_code == 200:
+                return [response.json()]  # Return as list for consistency
+            else:
+                print(f"ERROR: Repository '{repo_name}' not found or not accessible", file=sys.stderr)
+                return []
+        except requests.exceptions.RequestException as e:
+            print(f"ERROR: Failed to get repository '{repo_name}': {e}", file=sys.stderr)
+            return []
+    
     def get_org_repos(self):
-        """Get all repositories in the organization."""
+        """Get all repositories in the organization or single repo if REPO_NAME is set."""
+        if self.single_repo:
+            return self.get_single_repo(self.single_repo)
+        
         url = f"{self.base_url}/orgs/{self.org_name}/repos?per_page=100&type=all"
         return self.make_request(url)
     
@@ -168,14 +186,20 @@ class GitHubOrgScanner:
         
         # Console output
         print(f"\n{'='*60}")
-        print(f"GitHub Org: {self.org_name}")
+        if self.single_repo:
+            print(f"GitHub Repo: {self.org_name}/{self.single_repo}")
+        else:
+            print(f"GitHub Org: {self.org_name}")
         print(f"Scan Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*60}\n")
         
         # Get repositories
         repos = self.get_org_repos()
         if not repos:
-            print(f"ERROR: No repositories found or cannot access org '{self.org_name}'")
+            if self.single_repo:
+                print(f"ERROR: Repository '{self.single_repo}' not found or not accessible in org '{self.org_name}'")
+            else:
+                print(f"ERROR: No repositories found or cannot access org '{self.org_name}'")
             sys.exit(1)
         
         print(f"Total repos: {len(repos)}")
@@ -243,7 +267,10 @@ class GitHubOrgScanner:
         print(f"{'='*60}\n")
         
         # Save JSON report
-        report_path = f"./reports/scan_{self.org_name}_{timestamp}.json"
+        if self.single_repo:
+            report_path = f"./reports/scan_{self.org_name}_{self.single_repo}_{timestamp}.json"
+        else:
+            report_path = f"./reports/scan_{self.org_name}_{timestamp}.json"
         os.makedirs("./reports", exist_ok=True)
         
         with open(report_path, 'w') as f:

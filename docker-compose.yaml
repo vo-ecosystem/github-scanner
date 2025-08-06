@@ -9,6 +9,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_ORG=${GITHUB_ORG}
       - OLD_PR_THRESHOLD_DAYS=${OLD_PR_THRESHOLD_DAYS}
+      - GITHUB_REPO=${GITHUB_REPO}
     volumes:
       - ./reports:/app/reports
     networks:
