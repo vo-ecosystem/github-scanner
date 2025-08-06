@@ -1,13 +1,19 @@
 services:
   github-scanner:
-    build: .
+    build:
+      context: .
+      args:
+        - USER_ID=${USER_ID:-1000}
+        - GROUP_ID=${GROUP_ID:-1000}    
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_ORG=${GITHUB_ORG}
+      - OLD_PR_THRESHOLD_DAYS=${OLD_PR_THRESHOLD_DAYS}
     volumes:
       - ./reports:/app/reports
     networks:
       - scanner-network
+    user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
 
 networks:
   scanner-network:
