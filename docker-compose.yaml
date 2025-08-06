@@ -1,0 +1,14 @@
+services:
+  github-scanner:
+    build: .
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_ORG=${GITHUB_ORG}
+    volumes:
+      - ./reports:/app/reports
+    networks:
+      - scanner-network
+
+networks:
+  scanner-network:
+    driver: bridge
