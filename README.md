@@ -33,6 +33,37 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
    make clean       # Clean up
    ```
 
+## Single Repository Scan
+
+By default, the scanner analyzes all repositories in an organization. You can scan a specific repository instead by setting the `GITHUB_REPO` environment variable.
+
+### Usage Examples
+
+```bash
+# Scan entire organization (default)
+make fresh
+
+# Scan only a specific repository
+GITHUB_REPO=my-repo-name make fresh
+
+# Or set it in your .env file
+echo "GITHUB_REPO=my-repo-name" >> .env
+make fresh
+```
+
+### When to Use Single Repository Scan
+
+- **Testing**: Quickly test the scanner on a specific repository
+- **Focused Analysis**: Deep dive into a particular repository's health
+- **Performance**: Faster execution when you only need data for one repo
+- **Development**: Debugging or developing new features
+
+### Output Differences
+
+- **Header**: Shows `GitHub Repo: org/repo-name` instead of `GitHub Org: org-name`
+- **Report File**: Named `scan_org_repo_timestamp.json` instead of `scan_org_timestamp.json`
+- **Summary**: Always shows 1 total repo and 1 active repo (if the repo has recent activity)
+
 ## Configuration
 
 ### Environment Variables
@@ -41,6 +72,7 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
 |----------|----------|---------|-------------|
 | `GITHUB_ORG` | Yes | - | GitHub organization name |
 | `GITHUB_TOKEN` | Recommended | - | GitHub personal access token |
+| `GITHUB_REPO` | No | - | Specific repository name (scans only this repo instead of entire org) |
 | `OLD_PR_THRESHOLD_DAYS` | No | 30 | Days to consider PRs as "old" |
 
 ### GitHub Token
