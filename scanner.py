@@ -243,7 +243,7 @@ class GitHubOrgScanner:
             if has_issues:
                 # Clear progress line before showing problematic repo
                 print(f"\r{' ' * 80}\r", end='')  # Clear the progress line
-                print(f"⚠️  {result['name']}")
+                print(f"WARNING: {result['name']}")
                 print(f"   Branches: {result['total_branches']} ({result['branches_without_prs_count']} orphaned)")
                 
                 if result['open_prs']:
