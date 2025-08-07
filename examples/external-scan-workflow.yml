@@ -1,0 +1,145 @@
+name: External Repository Health Scan
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9 AM
+  workflow_dispatch:
+    inputs:
+      scan_mode:
+        description: 'Scan mode: single repo or entire org'
+        required: true
+        default: 'org'
+        type: choice
+        options:
+          - 'org'
+          - 'repo'
+      target_org:
+        description: 'GitHub organization to scan (for org mode)'
+        required: false
+        default: 'vo-ecosystem'
+        type: string
+      target_repo:
+        description: 'Specific repository to scan (for repo mode, format: owner/repo)'
+        required: false
+        type: string
+      pr_threshold_days:
+        description: 'Days threshold for old PRs'
+        required: false
+        default: '30'
+        type: string
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [ "${{ github.event.inputs.scan_mode }}" = "repo" ] && [ -z "${{ github.event.inputs.target_repo }}" ]; then
+            echo "Error: target_repo is required when scan_mode is 'repo'"
+            exit 1
+          fi
+          
+      - name: Checkout scanner repository
+        uses: actions/checkout@v4
+        with:
+          repository: vo-ecosystem/github-scanner
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: scanner
+          
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          cd scanner
+          pip install -r requirements.txt
+          
+      - name: Run Organization Scan
+        if: ${{ github.event.inputs.scan_mode == 'org' || github.event.inputs.scan_mode == '' }}
+        env:
+          GITHUB_ORG: ${{ github.event.inputs.target_org || 'vo-ecosystem' }}
+          OLD_PR_THRESHOLD_DAYS: ${{ github.event.inputs.pr_threshold_days || '30' }}
+        run: |
+          cd scanner
+          echo "Scanning organization: $GITHUB_ORG"
+          python scanner.py
+          
+      - name: Run Single Repository Scan
+        if: ${{ github.event.inputs.scan_mode == 'repo' }}
+        env:
+          GITHUB_ORG: ${{ github.event.inputs.target_org || 'vo-ecosystem' }}
+          OLD_PR_THRESHOLD_DAYS: ${{ github.event.inputs.pr_threshold_days || '30' }}
+        run: |
+          cd scanner
+          echo "Scanning single repository: ${{ github.event.inputs.target_repo }}"
+          # Extract org and repo from target_repo input
+          IFS='/' read -r org repo <<< "${{ github.event.inputs.target_repo }}"
+          export GITHUB_ORG="$org"
+          export SINGLE_REPO="$repo"
+          python scanner.py
+          
+      - name: Upload Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-scan-report-${{ github.run_number }}
+          path: scanner/reports/*.json
+          retention-days: 30
+          
+      - name: Create Issue with Results (Optional)
+        if: ${{ vars.CREATE_ISSUE_ON_SCAN == 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Read the latest JSON report
+            const reportsDir = 'scanner/reports';
+            const files = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
+            if (files.length === 0) {
+              console.log('No JSON reports found');
+              return;
+            }
+            
+            const latestFile = files.sort().pop();
+            const reportPath = path.join(reportsDir, latestFile);
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+            
+            // Create issue body
+            const scanMode = '${{ github.event.inputs.scan_mode }}' || 'org';
+            const target = scanMode === 'org' 
+              ? '${{ github.event.inputs.target_org || "vo-ecosystem" }}'
+              : '${{ github.event.inputs.target_repo }}';
+              
+            let body = `# Repository Health Scan Results\n\n`;
+            body += `**Scan Mode:** ${scanMode}\n`;
+            body += `**Target:** ${target}\n`;
+            body += `**Scan Date:** ${new Date().toISOString().split('T')[0]}\n\n`;
+            
+            if (report.summary) {
+              body += `## Summary\n`;
+              body += `- **Total Repositories:** ${report.summary.total_repositories || 0}\n`;
+              body += `- **Repositories with Issues:** ${report.summary.repositories_with_issues || 0}\n`;
+              body += `- **Total Stale Branches:** ${report.summary.total_stale_branches || 0}\n`;
+              body += `- **Total Old PRs:** ${report.summary.total_old_prs || 0}\n\n`;
+            }
+            
+            body += `## Actions Required\n`;
+            body += `Please review the uploaded artifacts for detailed information about:\n`;
+            body += `- Stale branches that can be cleaned up\n`;
+            body += `- Old pull requests that need attention\n`;
+            body += `- Repository health metrics\n\n`;
+            body += `**Artifact Name:** health-scan-report-${{ github.run_number }}\n`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Repository Health Scan Results - ${new Date().toISOString().split('T')[0]}`,
+              body: body,
+              labels: ['health-scan', 'automated']
+            });
