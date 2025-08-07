@@ -25,6 +25,41 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
    OLD_PR_THRESHOLD_DAYS=30
    ```
 
+### Creating GitHub Token with Minimal Permissions
+
+To create a GitHub Personal Access Token with minimal required permissions:
+
+1. **Go to GitHub Settings**:
+   - Navigate to [GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)](https://github.com/settings/tokens)
+   - Or go to your GitHub profile → Settings → Developer settings → Personal access tokens → Tokens (classic)
+
+2. **Generate New Token**:
+   - Click "Generate new token" → "Generate new token (classic)"
+   - Give it a descriptive name (e.g., "GitHub Scanner - [Organization Name]")
+   - Set expiration date (recommended: 90 days for security)
+
+3. **Select Minimal Required Scopes**:
+   - **`repo`** - Full control of private repositories (required for accessing repository data)
+   - **`read:org`** - Read organization membership and teams (required for organization scanning)
+
+   **Note**: If you only need to scan public repositories, you can use `public_repo` instead of full `repo` scope.
+
+4. **For Organization Access**:
+   - If scanning private repositories in an organization, ensure your token has access
+   - Organization owners may need to approve token access for private repos
+   - Check organization settings under "Third-party application access policy"
+
+5. **Security Best Practices**:
+   - Store the token securely (never commit to version control)
+   - Use environment variables or `.env` files (already in `.gitignore`)
+   - Regularly rotate tokens (set shorter expiration periods)
+   - Revoke unused tokens immediately
+
+6. **Token Format**:
+   ```
+   ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+
 3. Run the scanner:
    ```bash
    make scan        # Build and run
@@ -137,7 +172,7 @@ Scan Time: 2025-08-06 12:00:00
 Total repos: 96
 Active repos (last year): 72
 
-⚠️  problematic-repo
+problematic-repo
    Branches: 45 (23 orphaned)
    Old PRs (>30d): 2
 
