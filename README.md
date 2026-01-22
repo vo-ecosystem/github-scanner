@@ -6,6 +6,7 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
 
 - **Orphaned Branch Detection**: Identifies branches without open PRs (includes merged/closed PR branches)
 - **Old PR Analysis**: Configurable threshold for identifying stale pull requests
+- **Pretty-Print Table Format**: Human-friendly table output for stale PRs and orphaned branches
 - **Performance Optimized**: Efficient API usage for large organizations (100+ repos)
 - **Progress Tracking**: Real-time progress indicators during scanning
 - **Comprehensive Reporting**: Both console summary and detailed JSON reports
@@ -62,7 +63,8 @@ To create a GitHub Personal Access Token with minimal required permissions:
 
 3. Run the scanner:
    ```bash
-   make scan        # Build and run
+   make scan        # Build and run (JSON output)
+   make pretty      # Build and run with pretty table output
    make fresh       # Force rebuild and run
    make build       # Build only
    make clean       # Clean up
@@ -75,11 +77,17 @@ By default, the scanner analyzes all repositories in an organization. You can sc
 ### Usage Examples
 
 ```bash
-# Scan entire organization (default)
+# Scan entire organization (default JSON output)
 make fresh
+
+# Scan with pretty table output
+make pretty
 
 # Scan only a specific repository
 GITHUB_REPO=my-repo-name make fresh
+
+# Scan specific repository with pretty output
+GITHUB_REPO=my-repo-name make pretty
 
 # Or set it in your .env file
 echo "GITHUB_REPO=my-repo-name" >> .env
@@ -120,7 +128,8 @@ make fresh
 
 | Command | Description |
 |---------|-------------|
-| `make scan` | Build and run scanner |
+| `make scan` | Build and run scanner (JSON output) |
+| `make pretty` | Build and run with pretty table output |
 | `make build` | Build Docker image |
 | `make rebuild` | Force rebuild (no cache) |
 | `make run` | Run existing image |
@@ -147,21 +156,30 @@ make fresh
 
 ## Output
 
-### Console Output
+### Console Output (Default)
 
 - **Progress tracking**: Real-time scanning progress
 - **Problem repos only**: Shows only repositories with issues
 - **Clean summary**: Total repos, active repos, repos with issues, total open PRs
 - **Issue details**: Branch counts, orphaned branches, old PR counts
 
-### JSON Reports
+### Pretty Table Output (with `-p` or `--pretty` flag)
+
+- **Human-friendly table**: Formatted table with stale PRs and orphaned branches
+- **Detailed information**: Repository, type (Stale PR/Orphaned Branch), item name, user/author, age, and direct link
+- **Easy to read**: Perfect for manual review and sharing with team members
+- **Includes summary**: Still shows the standard summary statistics
+- **Markdown report**: Saves to `./reports/scan_{org}_{timestamp}.md` with formatted tables and clickable links
+
+### JSON Reports (default output)
 
 - **Location**: `./reports/scan_{org}_{timestamp}.json`
 - **Complete data**: All repositories with full metrics
 - **Stale branches**: Complete list of orphaned branches (no limits)
 - **Structured format**: Easy to parse and analyze
+- **Generated when**: Running without `--pretty` flag
 
-### Example Console Output
+### Example Console Output (Default)
 
 ```
 ============================================================
@@ -185,6 +203,38 @@ SUMMARY:
 • Repos needing attention listed above
 ============================================================
 ```
+
+### Example Pretty Table Output (Console)
+
+```
+====================================================================================================
+DETAILED REPORT - STALE PRs AND ORPHANED BRANCHES
+====================================================================================================
+
+Repository                     | Type             | Item                      | User/Author          | Age        | Link
+----------------------------------------------------------------------------------------------------
+my-backend-api                 | Stale PR         | PR #123                   | john.doe             | 45 days    | https://github.com/org/my-backend-api/pull/123
+my-backend-api                 | Orphaned Branch  | feature/old-feature       | jane.smith           | -          | https://github.com/org/my-backend-api/tree/feature/old-feature
+frontend-app                   | Stale PR         | PR #87                    | bob.jones            | 62 days    | https://github.com/org/frontend-app/pull/87
+frontend-app                   | Orphaned Branch  | bugfix/legacy-fix         | alice.williams       | -          | https://github.com/org/frontend-app/tree/bugfix/legacy-fix
+
+Total items: 4
+====================================================================================================
+```
+
+### Example Markdown Report (`.md` file)
+
+The Markdown report includes:
+- **Header**: Organization/repo name, scan time, threshold settings
+- **Summary section**: Key metrics (total repos, active repos, repos with issues, total PRs)
+- **Stale PRs and Orphaned Branches table**: Formatted Markdown table with clickable links
+- **Repository Details section**: Detailed breakdown of each problematic repository
+
+The Markdown file can be:
+- Viewed directly in GitHub with proper formatting
+- Shared with team members via email or chat
+- Converted to PDF or other formats
+- Included in documentation or reports
 
 ## Security
 
