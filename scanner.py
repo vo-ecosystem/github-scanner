@@ -7,12 +7,13 @@ Runs in Docker container for isolation
 import os
 import sys
 import json
+import argparse
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 
 class GitHubOrgScanner:
-    def __init__(self, org_name, token=None):
+    def __init__(self, org_name, token=None, pretty_print=False):
         self.org_name = org_name
         self.base_url = "https://api.github.com"
         self.headers = {"Accept": "application/vnd.github.v3+json"}
@@ -22,6 +23,7 @@ class GitHubOrgScanner:
         self.old_pr_threshold_days = int(os.environ.get('OLD_PR_THRESHOLD_DAYS', '30'))
         self.single_repo = os.environ.get('GITHUB_REPO')  # If set, scan only this repo
         self.report_data = []
+        self.pretty_print = pretty_print
     
     def make_request(self, url):
         """Make paginated requests to GitHub API."""
@@ -140,6 +142,19 @@ class GitHubOrgScanner:
             print(f"Failed to get protected branches for {repo_name}: {e}", file=sys.stderr)
         return protected_branches
     
+    def get_branch_last_commit_author(self, repo_name, branch_name):
+        """Get the last commit author for a branch."""
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/commits/{branch_name}"
+        try:
+            response = requests.get(url, headers=self.headers, timeout=30)
+            if response.status_code == 200:
+                commit_data = response.json()
+                author = commit_data.get('commit', {}).get('author', {})
+                return author.get('name', 'Unknown')
+        except:
+            pass
+        return 'Unknown'
+    
     def analyze_repo(self, repo):
         """Analyze a single repository."""
         repo_name = repo['name']
@@ -153,7 +168,9 @@ class GitHubOrgScanner:
             pr_info.append({
                 'number': pr['number'],
                 'days_old': days_old,
-                'created_at': created_at.strftime("%Y-%m-%d")
+                'created_at': created_at.strftime("%Y-%m-%d"),
+                'url': pr['html_url'],
+                'user': pr['user']['login'] if pr.get('user') else 'Unknown'
             })
         
         # Get branches
@@ -171,13 +188,24 @@ class GitHubOrgScanner:
         excluded_branches = {default_branch} | protected_branches
         orphaned_branches = branch_names - open_pr_branches - excluded_branches
         
+        # Get branch details with authors if pretty print is enabled
+        orphaned_branch_details = []
+        if self.pretty_print:
+            for branch_name in orphaned_branches:
+                author = self.get_branch_last_commit_author(repo_name, branch_name)
+                orphaned_branch_details.append({
+                    'name': branch_name,
+                    'author': author
+                })
+        
         return {
             'name': repo_name,
             'url': repo['html_url'],
             'open_prs': sorted(pr_info, key=lambda x: x['days_old'], reverse=True),
             'total_branches': len(branches),
             'branches_without_prs_count': len(orphaned_branches),
-            'stale_branches': list(orphaned_branches)
+            'stale_branches': list(orphaned_branches),
+            'orphaned_branch_details': orphaned_branch_details
         }
     
     def generate_report(self):
@@ -266,20 +294,163 @@ class GitHubOrgScanner:
         print(f"• Repos needing attention listed above")
         print(f"{'='*60}\n")
         
-        # Save JSON report
-        if self.single_repo:
-            report_path = f"./reports/scan_{self.org_name}_{self.single_repo}_{timestamp}.json"
-        else:
-            report_path = f"./reports/scan_{self.org_name}_{timestamp}.json"
+        # Save reports
         os.makedirs("./reports", exist_ok=True)
         
-        with open(report_path, 'w') as f:
-            json.dump(summary, f, indent=2, default=str)
-            f.write('\n')  # Add blank line at end
+        if self.pretty_print:
+            # Save Markdown report for pretty output
+            if self.single_repo:
+                report_path = f"./reports/scan_{self.org_name}_{self.single_repo}_{timestamp}.md"
+            else:
+                report_path = f"./reports/scan_{self.org_name}_{timestamp}.md"
+            
+            self.save_markdown_report(summary, report_path, timestamp)
+            print(f"Full report saved: {report_path}")
+            
+            # Also print to console
+            self.print_pretty_table(summary)
+        else:
+            # Save JSON report for default output
+            if self.single_repo:
+                report_path = f"./reports/scan_{self.org_name}_{self.single_repo}_{timestamp}.json"
+            else:
+                report_path = f"./reports/scan_{self.org_name}_{timestamp}.json"
+            
+            with open(report_path, 'w') as f:
+                json.dump(summary, f, indent=2, default=str)
+                f.write('\n')  # Add blank line at end
+            
+            print(f"Full report saved: {report_path}")
+    
+    def collect_table_rows(self, summary):
+        """Collect all table rows for stale PRs and orphaned branches."""
+        table_rows = []
         
-        print(f"Full report saved: {report_path}")
+        for repo in summary['repos']:
+            repo_name = repo['name']
+            
+            # Add stale PRs (older than threshold)
+            for pr in repo['open_prs']:
+                if pr['days_old'] > self.old_pr_threshold_days:
+                    table_rows.append({
+                        'repo': repo_name,
+                        'type': 'Stale PR',
+                        'item': f"PR #{pr['number']}",
+                        'link': pr['url'],
+                        'user': pr['user'],
+                        'age': f"{pr['days_old']} days"
+                    })
+            
+            # Add orphaned branches
+            for branch_detail in repo.get('orphaned_branch_details', []):
+                table_rows.append({
+                    'repo': repo_name,
+                    'type': 'Orphaned Branch',
+                    'item': branch_detail['name'],
+                    'link': f"https://github.com/{self.org_name}/{repo_name}/tree/{branch_detail['name']}",
+                    'user': branch_detail['author'],
+                    'age': '-'
+                })
+        
+        return table_rows
+    
+    def save_markdown_report(self, summary, report_path, timestamp):
+        """Save a Markdown report with pretty formatting."""
+        table_rows = self.collect_table_rows(summary)
+        
+        with open(report_path, 'w') as f:
+            # Header
+            f.write(f"# GitHub Repository Health Report\n\n")
+            if self.single_repo:
+                f.write(f"**Repository:** {self.org_name}/{self.single_repo}\n\n")
+            else:
+                f.write(f"**Organization:** {self.org_name}\n\n")
+            f.write(f"**Scan Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"**Old PR Threshold:** {self.old_pr_threshold_days} days\n\n")
+            
+            # Summary
+            f.write("## Summary\n\n")
+            f.write(f"- **Total repositories:** {summary['total_repos']}\n")
+            f.write(f"- **Active repositories (last year):** {summary['active_repos']}\n")
+            f.write(f"- **Repositories with issues:** {summary['repos_with_issues']}\n")
+            f.write(f"- **Total open PRs:** {summary['total_open_prs']}\n\n")
+            
+            # Detailed table
+            f.write("## Stale PRs and Orphaned Branches\n\n")
+            
+            if not table_rows:
+                f.write("✅ No stale PRs or orphaned branches found.\n\n")
+            else:
+                # Markdown table
+                f.write("| Repository | Type | Item | User/Author | Age | Link |\n")
+                f.write("|------------|------|------|-------------|-----|------|\n")
+                
+                for row in table_rows:
+                    f.write(f"| {row['repo']} | {row['type']} | {row['item']} | {row['user']} | {row['age']} | [View]({row['link']}) |\n")
+                
+                f.write(f"\n**Total items:** {len(table_rows)}\n\n")
+            
+            # Repository details
+            f.write("## Repository Details\n\n")
+            for repo in summary['repos']:
+                has_issues = (len(repo['open_prs']) > 3 or 
+                             any(pr['days_old'] > self.old_pr_threshold_days for pr in repo['open_prs']) or
+                             repo['branches_without_prs_count'] > 0)
+                
+                if has_issues:
+                    f.write(f"### {repo['name']}\n\n")
+                    f.write(f"- **Repository URL:** [{repo['url']}]({repo['url']})\n")
+                    f.write(f"- **Total branches:** {repo['total_branches']}\n")
+                    f.write(f"- **Orphaned branches:** {repo['branches_without_prs_count']}\n")
+                    f.write(f"- **Open PRs:** {len(repo['open_prs'])}\n")
+                    
+                    old_prs = [pr for pr in repo['open_prs'] if pr['days_old'] > self.old_pr_threshold_days]
+                    if old_prs:
+                        f.write(f"- **Old PRs (>{self.old_pr_threshold_days}d):** {len(old_prs)}\n")
+                    
+                    f.write("\n")
+    
+    def print_pretty_table(self, summary):
+        """Print a human-friendly table of stale PRs and orphaned branches."""
+        print(f"\n{'='*100}")
+        print("DETAILED REPORT - STALE PRs AND ORPHANED BRANCHES")
+        print(f"{'='*100}\n")
+        
+        table_rows = self.collect_table_rows(summary)
+        
+        if not table_rows:
+            print("No stale PRs or orphaned branches found.\n")
+            return
+        
+        # Print table header
+        header = f"{'Repository':<30} | {'Type':<16} | {'Item':<25} | {'User/Author':<20} | {'Age':<10} | {'Link'}"
+        print(header)
+        print("-" * len(header))
+        
+        # Print table rows
+        for row in table_rows:
+            repo_col = row['repo'][:29] if len(row['repo']) > 29 else row['repo']
+            item_col = row['item'][:24] if len(row['item']) > 24 else row['item']
+            user_col = row['user'][:19] if len(row['user']) > 19 else row['user']
+            
+            print(f"{repo_col:<30} | {row['type']:<16} | {item_col:<25} | {user_col:<20} | {row['age']:<10} | {row['link']}")
+        
+        print(f"\nTotal items: {len(table_rows)}")
+        print(f"{'='*100}\n")
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='GitHub Organization Repository Scanner',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        '-p', '--pretty',
+        action='store_true',
+        help='Output a human-friendly table of stale PRs and orphaned branches'
+    )
+    args = parser.parse_args()
+    
     org_name = os.environ.get('GITHUB_ORG')
     token = os.environ.get('GITHUB_TOKEN')
     
@@ -291,7 +462,7 @@ def main():
         print("WARNING: No GITHUB_TOKEN provided. API rate limits will be restrictive (60/hour).")
         print("Provide token for 5000 requests/hour.\n")
     
-    scanner = GitHubOrgScanner(org_name, token)
+    scanner = GitHubOrgScanner(org_name, token, pretty_print=args.pretty)
     scanner.generate_report()
 
 if __name__ == "__main__":
