@@ -47,6 +47,15 @@ jobs:
           
           echo "github_org=$GITHUB_ORG" >> $GITHUB_OUTPUT
           
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          
       - name: Run GitHub Scanner
         env:
           GITHUB_TOKEN: ${{ secrets.SCANNER_PAT }}
@@ -55,7 +64,8 @@ jobs:
         run: |
           echo "Starting scan for organization: $GITHUB_ORG"
           echo "PR threshold: $OLD_PR_THRESHOLD_DAYS days"
-          make pretty
+          mkdir -p reports
+          python scanner.py --pretty
           
       - name: Upload Report to Discord
         env:
