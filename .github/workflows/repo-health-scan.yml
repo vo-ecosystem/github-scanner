@@ -1,7 +1,7 @@
 name: Repository Health Scan
 on:
   schedule:
-    - cron: '0 8 * * *'  # Run daily at 8 AM UTC
+    - cron: '0 1 * * *'  # Run daily at 8 AM UTC
   workflow_dispatch:      # Manual trigger
     inputs:
       github_org:
@@ -27,7 +27,7 @@ jobs:
         run: |
           # Priority order:
           # 1. Manual input from workflow_dispatch
-          # 2. GITHUB_ORG from variables
+          # 2. ORG_NAME from variables
           
           GITHUB_ORG=""
           
@@ -35,12 +35,12 @@ jobs:
           if [ -n "${{ github.event.inputs.github_org }}" ]; then
             GITHUB_ORG="${{ github.event.inputs.github_org }}"
             echo "Using GitHub org from manual input: $GITHUB_ORG"
-          elif [ -n "${{ vars.GITHUB_ORG }}" ]; then
-            GITHUB_ORG="${{ vars.GITHUB_ORG }}"
+          elif [ -n "${{ vars.ORG_NAME }}" ]; then
+            GITHUB_ORG="${{ vars.ORG_NAME }}"
             echo "Using GitHub org from variables: $GITHUB_ORG"
           else
             echo "Error: No GitHub organization specified. Please either:"
-            echo "1. Set GITHUB_ORG variable in repository settings"
+            echo "1. Set ORG_NAME variable in repository settings"
             echo "2. Provide github_org input when running manually"
             exit 1
           fi
@@ -49,7 +49,7 @@ jobs:
           
       - name: Run GitHub Scanner
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SCANNER_PAT }}
           GITHUB_ORG: ${{ steps.determine-org.outputs.github_org }}
           OLD_PR_THRESHOLD_DAYS: ${{ github.event.inputs.pr_threshold_days || '30' }}
         run: |
