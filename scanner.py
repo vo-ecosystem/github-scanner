@@ -117,6 +117,36 @@ class GitHubOrgScanner:
         
         return open_pr_branches
     
+    def get_closed_merged_pr_branches(self, repo_name):
+        """Get branches with closed/merged PRs and their details."""
+        closed_merged_branches = []
+        
+        # Get closed PRs
+        url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/pulls?state=closed&per_page=100"
+        prs = self.make_request(url)
+        
+        for pr in prs:
+            if pr.get('head', {}).get('ref'):
+                branch_name = pr['head']['ref']
+                closed_at = pr.get('closed_at')
+                merged_at = pr.get('merged_at')
+                
+                if closed_at:
+                    closed_date = datetime.strptime(closed_at, "%Y-%m-%dT%H:%M:%SZ")
+                    days_since_closed = (datetime.now() - closed_date).days
+                    
+                    closed_merged_branches.append({
+                        'branch': branch_name,
+                        'pr_number': pr['number'],
+                        'pr_url': pr['html_url'],
+                        'user': pr['user']['login'] if pr.get('user') else 'Unknown',
+                        'status': 'merged' if merged_at else 'closed',
+                        'closed_at': closed_date.strftime("%Y-%m-%d"),
+                        'days_since_closed': days_since_closed
+                    })
+        
+        return closed_merged_branches
+    
     def get_default_branch(self, repo_name):
         """Get the default branch for a repository."""
         url = f"{self.base_url}/repos/{self.org_name}/{repo_name}"
@@ -180,6 +210,12 @@ class GitHubOrgScanner:
         # Get branches with open PRs only (branches with closed/merged PRs are considered orphaned)
         open_pr_branches = self.get_open_pr_branches(repo_name)
         
+        # Get closed/merged PR branches
+        closed_merged_pr_branches = self.get_closed_merged_pr_branches(repo_name)
+        
+        # Filter to only include branches that still exist
+        closed_merged_existing = [b for b in closed_merged_pr_branches if b['branch'] in branch_names]
+        
         # Get default and protected branches to exclude
         default_branch = self.get_default_branch(repo_name)
         protected_branches = self.get_protected_branches(repo_name)
@@ -192,6 +228,9 @@ class GitHubOrgScanner:
         orphaned_branch_details = []
         if self.pretty_print:
             for branch_name in orphaned_branches:
+                # Skip if this branch has a closed/merged PR (we'll show it separately)
+                if any(b['branch'] == branch_name for b in closed_merged_existing):
+                    continue
                 author = self.get_branch_last_commit_author(repo_name, branch_name)
                 orphaned_branch_details.append({
                     'name': branch_name,
@@ -205,7 +244,8 @@ class GitHubOrgScanner:
             'total_branches': len(branches),
             'branches_without_prs_count': len(orphaned_branches),
             'stale_branches': list(orphaned_branches),
-            'orphaned_branch_details': orphaned_branch_details
+            'orphaned_branch_details': orphaned_branch_details,
+            'closed_merged_pr_branches': closed_merged_existing
         }
     
     def generate_report(self):
@@ -358,6 +398,22 @@ class GitHubOrgScanner:
         """Save a Markdown report with pretty formatting."""
         table_rows = self.collect_table_rows(summary)
         
+        # Collect closed/merged PR branches
+        closed_merged_rows = []
+        for repo in summary['repos']:
+            repo_name = repo['name']
+            for branch in repo.get('closed_merged_pr_branches', []):
+                closed_merged_rows.append({
+                    'repo': repo_name,
+                    'branch': branch['branch'],
+                    'pr_number': branch['pr_number'],
+                    'pr_url': branch['pr_url'],
+                    'user': branch['user'],
+                    'status': branch['status'],
+                    'closed_at': branch['closed_at'],
+                    'days_since_closed': branch['days_since_closed']
+                })
+        
         with open(report_path, 'w') as f:
             # Header
             f.write(f"# GitHub Repository Health Report\n\n")
@@ -373,7 +429,8 @@ class GitHubOrgScanner:
             f.write(f"- **Total repositories:** {summary['total_repos']}\n")
             f.write(f"- **Active repositories (last year):** {summary['active_repos']}\n")
             f.write(f"- **Repositories with issues:** {summary['repos_with_issues']}\n")
-            f.write(f"- **Total open PRs:** {summary['total_open_prs']}\n\n")
+            f.write(f"- **Total open PRs:** {summary['total_open_prs']}\n")
+            f.write(f"- **Branches with closed/merged PRs:** {len(closed_merged_rows)}\n\n")
             
             # Detailed table
             f.write("## Stale PRs and Orphaned Branches\n\n")
@@ -389,6 +446,23 @@ class GitHubOrgScanner:
                     f.write(f"| {row['repo']} | {row['type']} | {row['item']} | {row['user']} | {row['age']} | [View]({row['link']}) |\n")
                 
                 f.write(f"\n**Total items:** {len(table_rows)}\n\n")
+            
+            # Closed/Merged PR Branches section
+            f.write("## Branches with Closed/Merged PRs\n\n")
+            f.write("These branches still exist but their PRs have been closed or merged. Consider deleting them.\n\n")
+            
+            if not closed_merged_rows:
+                f.write("✅ No branches with closed/merged PRs found.\n\n")
+            else:
+                # Markdown table
+                f.write("| Repository | Branch | PR | User | Status | Closed Date | Days Since | Link |\n")
+                f.write("|------------|--------|----|----- |--------|-------------|------------|------|\n")
+                
+                for row in closed_merged_rows:
+                    status_emoji = "🟣" if row['status'] == 'merged' else "🔴"
+                    f.write(f"| {row['repo']} | {row['branch']} | PR #{row['pr_number']} | {row['user']} | {status_emoji} {row['status'].title()} | {row['closed_at']} | {row['days_since_closed']} days | [View]({row['pr_url']}) |\n")
+                
+                f.write(f"\n**Total branches:** {len(closed_merged_rows)}\n\n")
             
             # Repository details
             f.write("## Repository Details\n\n")
@@ -420,22 +494,50 @@ class GitHubOrgScanner:
         
         if not table_rows:
             print("No stale PRs or orphaned branches found.\n")
-            return
-        
-        # Print table header
-        header = f"{'Repository':<30} | {'Type':<16} | {'Item':<25} | {'User/Author':<20} | {'Age':<10} | {'Link'}"
-        print(header)
-        print("-" * len(header))
-        
-        # Print table rows
-        for row in table_rows:
-            repo_col = row['repo'][:29] if len(row['repo']) > 29 else row['repo']
-            item_col = row['item'][:24] if len(row['item']) > 24 else row['item']
-            user_col = row['user'][:19] if len(row['user']) > 19 else row['user']
+        else:
+            # Print table header
+            header = f"{'Repository':<30} | {'Type':<16} | {'Item':<25} | {'User/Author':<20} | {'Age':<10} | {'Link'}"
+            print(header)
+            print("-" * len(header))
             
-            print(f"{repo_col:<30} | {row['type']:<16} | {item_col:<25} | {user_col:<20} | {row['age']:<10} | {row['link']}")
+            # Print table rows
+            for row in table_rows:
+                repo_col = row['repo'][:29] if len(row['repo']) > 29 else row['repo']
+                item_col = row['item'][:24] if len(row['item']) > 24 else row['item']
+                user_col = row['user'][:19] if len(row['user']) > 19 else row['user']
+                
+                print(f"{repo_col:<30} | {row['type']:<16} | {item_col:<25} | {user_col:<20} | {row['age']:<10} | {row['link']}")
+            
+            print(f"\nTotal items: {len(table_rows)}")
         
-        print(f"\nTotal items: {len(table_rows)}")
+        # Print closed/merged PR branches
+        print(f"\n{'='*100}")
+        print("BRANCHES WITH CLOSED/MERGED PRs")
+        print(f"{'='*100}\n")
+        
+        closed_merged_count = 0
+        for repo in summary['repos']:
+            for branch in repo.get('closed_merged_pr_branches', []):
+                if closed_merged_count == 0:
+                    # Print header
+                    header = f"{'Repository':<30} | {'Branch':<25} | {'PR':<10} | {'User':<15} | {'Status':<10} | {'Days':<8} | {'Link'}"
+                    print(header)
+                    print("-" * len(header))
+                
+                repo_col = repo['name'][:29] if len(repo['name']) > 29 else repo['name']
+                branch_col = branch['branch'][:24] if len(branch['branch']) > 24 else branch['branch']
+                user_col = branch['user'][:14] if len(branch['user']) > 14 else branch['user']
+                pr_col = f"#{branch['pr_number']}"
+                status_col = branch['status'].title()
+                
+                print(f"{repo_col:<30} | {branch_col:<25} | {pr_col:<10} | {user_col:<15} | {status_col:<10} | {branch['days_since_closed']:<8} | {branch['pr_url']}")
+                closed_merged_count += 1
+        
+        if closed_merged_count == 0:
+            print("No branches with closed/merged PRs found.\n")
+        else:
+            print(f"\nTotal branches: {closed_merged_count}")
+        
         print(f"{'='*100}\n")
 
 def main():
