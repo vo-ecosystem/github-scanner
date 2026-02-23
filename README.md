@@ -5,11 +5,13 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
 ## Features
 
 - **Orphaned Branch Detection**: Identifies branches without open PRs (includes merged/closed PR branches)
+- **Closed/Merged PR Branch Tracking**: Identifies branches that still exist after their PRs were closed or merged
 - **Old PR Analysis**: Configurable threshold for identifying stale pull requests
 - **Pretty-Print Table Format**: Human-friendly table output for stale PRs and orphaned branches
+- **Discord Integration**: Automated report uploads to Discord via GitHub Actions
 - **Performance Optimized**: Efficient API usage for large organizations (100+ repos)
 - **Progress Tracking**: Real-time progress indicators during scanning
-- **Comprehensive Reporting**: Both console summary and detailed JSON reports
+- **Comprehensive Reporting**: Both console summary and detailed JSON/Markdown reports
 - **Docker Isolation**: Secure, containerized execution
 
 ## Setup
@@ -166,6 +168,7 @@ make fresh
 ### Pretty Table Output (with `-p` or `--pretty` flag)
 
 - **Human-friendly table**: Formatted table with stale PRs and orphaned branches
+- **Closed/Merged PR branches**: Separate section showing branches that still exist after PR closure/merge
 - **Detailed information**: Repository, type (Stale PR/Orphaned Branch), item name, user/author, age, and direct link
 - **Easy to read**: Perfect for manual review and sharing with team members
 - **Includes summary**: Still shows the standard summary statistics
@@ -233,8 +236,40 @@ The Markdown report includes:
 The Markdown file can be:
 - Viewed directly in GitHub with proper formatting
 - Shared with team members via email or chat
+- Automatically uploaded to Discord via GitHub Actions
 - Converted to PDF or other formats
 - Included in documentation or reports
+
+### Closed/Merged PR Branches Section
+
+The report now includes a dedicated section for branches that still exist even though their PRs have been closed or merged:
+- **Branch name**: The name of the branch that should be deleted
+- **PR number and link**: Direct link to the closed/merged PR
+- **User**: Who created the PR
+- **Status**: Whether the PR was merged (🟣) or just closed (🔴)
+- **Days since closed**: How long ago the PR was closed
+- **Recommendation**: These branches are safe to delete
+
+## GitHub Actions Workflow
+
+The repository includes a GitHub Actions workflow that:
+- Automatically scans organizations on push to `scan` branch
+- Can be triggered manually with custom organization and threshold
+- Generates Markdown reports with pretty formatting
+- Uploads reports to Discord webhook automatically
+- Saves reports as GitHub Actions artifacts (30-day retention)
+
+### Workflow Triggers
+
+1. **Push to `scan` branch**: Automatically runs the scan
+2. **Manual trigger**: Run from GitHub Actions UI with custom inputs
+
+### Discord Integration
+
+The workflow automatically uploads the generated Markdown report to Discord:
+- Report is posted as a file attachment
+- Includes organization name in the message
+- Webhook URL is configured in the workflow file
 
 ## Security
 

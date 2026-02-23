@@ -1,5 +1,7 @@
 name: Repository Health Scan
 on:
+  schedule:
+    - cron: '0 8 * * *'  # Run daily at 8 AM UTC
   push:
     branches:
       - scan
@@ -65,11 +67,30 @@ jobs:
         run: |
           echo "Starting scan for organization: $GITHUB_ORG"
           echo "PR threshold: $OLD_PR_THRESHOLD_DAYS days"
-          make fresh
+          make pretty
           
-      - name: Upload Report
+      - name: Upload Report to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          # Find the generated markdown report
+          REPORT_FILE=$(ls -t reports/*.md | head -1)
+          
+          if [ -z "$REPORT_FILE" ]; then
+            echo "Error: No markdown report found"
+            exit 1
+          fi
+          
+          echo "Uploading report: $REPORT_FILE"
+          
+          # Upload file to Discord webhook
+          curl -F "file=@$REPORT_FILE" \
+               -F "content=📊 **GitHub Repository Health Report** - Organization: ${{ steps.determine-org.outputs.github_org }}" \
+               "$DISCORD_WEBHOOK_URL"
+          
+      - name: Upload Report as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: health-report-${{ steps.determine-org.outputs.github_org }}-${{ github.run_number }}
-          path: reports/*.json
+          path: reports/*.md
           retention-days: 30
