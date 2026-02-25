@@ -61,9 +61,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.SCANNER_PAT }}
           GITHUB_ORG: ${{ steps.determine-org.outputs.github_org }}
           OLD_PR_THRESHOLD_DAYS: ${{ github.event.inputs.pr_threshold_days || '30' }}
+          DELETE_ORPHANED_BRANCHES: ${{ vars.DELETE_ORPHANED_BRANCHES || 'false' }}
         run: |
           echo "Starting scan for organization: $GITHUB_ORG"
           echo "PR threshold: $OLD_PR_THRESHOLD_DAYS days"
+          echo "Auto-delete branches: $DELETE_ORPHANED_BRANCHES"
           mkdir -p reports
           python scanner.py --pretty
           
