@@ -1,8 +1,7 @@
 name: Repository Health Scan
 on:
-  push:
-    branches:
-      - scan
+  schedule:
+    - cron: '0 1 * * *'  # Run daily at 8 AM UTC
   workflow_dispatch:      # Manual trigger
     inputs:
       github_org:
@@ -28,8 +27,7 @@ jobs:
         run: |
           # Priority order:
           # 1. Manual input from workflow_dispatch
-          # 2. GITHUB_ORG from commit message
-          # 3. GITHUB_ORG from secrets
+          # 2. ORG_NAME from variables
           
           GITHUB_ORG=""
           
@@ -37,39 +35,62 @@ jobs:
           if [ -n "${{ github.event.inputs.github_org }}" ]; then
             GITHUB_ORG="${{ github.event.inputs.github_org }}"
             echo "Using GitHub org from manual input: $GITHUB_ORG"
+          elif [ -n "${{ vars.ORG_NAME }}" ]; then
+            GITHUB_ORG="${{ vars.ORG_NAME }}"
+            echo "Using GitHub org from variables: $GITHUB_ORG"
           else
-            # Extract from commit message if available
-            COMMIT_MSG="$(git log -1 --pretty=%B)"
-            if echo "$COMMIT_MSG" | grep -q "GITHUB_ORG="; then
-              GITHUB_ORG=$(echo "$COMMIT_MSG" | grep -o "GITHUB_ORG=[^[:space:]]*" | cut -d'=' -f2)
-              echo "Using GitHub org from commit message: $GITHUB_ORG"
-            elif [ -n "${{ secrets.GITHUB_ORG }}" ]; then
-              GITHUB_ORG="${{ secrets.GITHUB_ORG }}"
-              echo "Using GitHub org from secrets: $GITHUB_ORG"
-            else
-              echo "Error: No GitHub organization specified. Please either:"
-              echo "1. Set GITHUB_ORG secret in repository settings"
-              echo "2. Include 'GITHUB_ORG=your-org' in commit message"
-              echo "3. Provide github_org input when running manually"
-              exit 1
-            fi
+            echo "Error: No GitHub organization specified. Please either:"
+            echo "1. Set ORG_NAME variable in repository settings"
+            echo "2. Provide github_org input when running manually"
+            exit 1
           fi
           
           echo "github_org=$GITHUB_ORG" >> $GITHUB_OUTPUT
           
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          
       - name: Run GitHub Scanner
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SCANNER_PAT }}
           GITHUB_ORG: ${{ steps.determine-org.outputs.github_org }}
           OLD_PR_THRESHOLD_DAYS: ${{ github.event.inputs.pr_threshold_days || '30' }}
+          DELETE_ORPHANED_BRANCHES: ${{ vars.DELETE_ORPHANED_BRANCHES || 'false' }}
         run: |
           echo "Starting scan for organization: $GITHUB_ORG"
           echo "PR threshold: $OLD_PR_THRESHOLD_DAYS days"
-          make fresh
+          echo "Auto-delete branches: $DELETE_ORPHANED_BRANCHES"
+          mkdir -p reports
+          python scanner.py --pretty
           
-      - name: Upload Report
+      - name: Upload Report to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          # Find the generated markdown report
+          REPORT_FILE=$(ls -t reports/*.md | head -1)
+          
+          if [ -z "$REPORT_FILE" ]; then
+            echo "Error: No markdown report found"
+            exit 1
+          fi
+          
+          echo "Uploading report: $REPORT_FILE"
+          
+          # Upload file to Discord webhook
+          curl -F "file=@$REPORT_FILE" \
+               -F "content=📊 **GitHub Repository Health Report** - Organization: ${{ steps.determine-org.outputs.github_org }}" \
+               "$DISCORD_WEBHOOK_URL"
+          
+      - name: Upload Report as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: health-report-${{ steps.determine-org.outputs.github_org }}-${{ github.run_number }}
-          path: reports/*.json
+          path: reports/*.md
           retention-days: 30

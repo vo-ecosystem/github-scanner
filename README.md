@@ -5,11 +5,19 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
 ## Features
 
 - **Orphaned Branch Detection**: Identifies branches without open PRs (includes merged/closed PR branches)
+- **Closed/Merged PR Branch Tracking**: Identifies branches that still exist after their PRs were closed or merged
+- **Automated Cleanup**: Delete orphaned branches and close stale PRs with dedicated commands
+- **Auto-Delete Mode**: Automatically delete branches with closed/merged PRs via environment variable
+- **Smart Branch Protection**: Automatically excludes standard branches (main, staging, dev, prod, etc.)
+- **Archived Repository Handling**: Automatically skips archived repositories from analysis
+- **API Error Resilience**: Automatic retry with backoff for transient 403 errors
+- **Duplicate Branch Handling**: Deduplicates branches with multiple closed/merged PRs
 - **Old PR Analysis**: Configurable threshold for identifying stale pull requests
 - **Pretty-Print Table Format**: Human-friendly table output for stale PRs and orphaned branches
+- **Discord Integration**: Automated report uploads to Discord via GitHub Actions
 - **Performance Optimized**: Efficient API usage for large organizations (100+ repos)
 - **Progress Tracking**: Real-time progress indicators during scanning
-- **Comprehensive Reporting**: Both console summary and detailed JSON reports
+- **Comprehensive Reporting**: Both console summary and detailed JSON/Markdown reports
 - **Docker Isolation**: Secure, containerized execution
 
 ## Setup
@@ -24,6 +32,7 @@ Dockerized tool to scan GitHub organizations for repository health metrics. Opti
    GITHUB_ORG=your-org-name
    GITHUB_TOKEN=ghp_your_token_here
    OLD_PR_THRESHOLD_DAYS=30
+   DELETE_ORPHANED_BRANCHES=false
    ```
 
 ### Creating GitHub Token with Minimal Permissions
@@ -65,6 +74,8 @@ To create a GitHub Personal Access Token with minimal required permissions:
    ```bash
    make scan        # Build and run (JSON output)
    make pretty      # Build and run with pretty table output
+   make dbr         # Delete all orphaned branches (requires confirmation)
+   make dpr         # Close all stale PRs (requires confirmation)
    make fresh       # Force rebuild and run
    make build       # Build only
    make clean       # Clean up
@@ -117,12 +128,21 @@ make fresh
 | `GITHUB_TOKEN` | Recommended | - | GitHub personal access token |
 | `GITHUB_REPO` | No | - | Specific repository name (scans only this repo instead of entire org) |
 | `OLD_PR_THRESHOLD_DAYS` | No | 30 | Days to consider PRs as "old" |
+| `DELETE_ORPHANED_BRANCHES` | No | false | Auto-delete branches with closed/merged PRs during scan |
+
+**Note:** The scanner automatically excludes:
+- Archived repositories (read-only)
+- Inactive repositories (no activity in last year)
+- Standard branches: `main`, `master`, `develop`, `development`, `dev`, `staging`, `stage`, `prod`, `production`, `test`, `testing`, `qa`, `uat`, `preprod`, `pre-prod`, `release`, `hotfix`, `stable`
 
 ### GitHub Token
 
 - **Without token**: 60 requests/hour (rate limited)
 - **With token**: 5000 requests/hour
-- **Permissions needed**: `repo` (for private repos) or `public_repo` (for public repos only)
+- **Permissions needed**: 
+  - `repo` - Full control of private repositories (required for deletion operations)
+  - `read:org` - Read organization membership (required for org scanning)
+  - For read-only scanning of public repos: `public_repo` + `read:org`
 
 ## Makefile Commands
 
@@ -130,6 +150,8 @@ make fresh
 |---------|-------------|
 | `make scan` | Build and run scanner (JSON output) |
 | `make pretty` | Build and run with pretty table output |
+| `make dbr` | **Delete orphaned branches** (requires confirmation) |
+| `make dpr` | **Close stale PRs** (requires confirmation) |
 | `make build` | Build Docker image |
 | `make rebuild` | Force rebuild (no cache) |
 | `make run` | Run existing image |
@@ -166,6 +188,7 @@ make fresh
 ### Pretty Table Output (with `-p` or `--pretty` flag)
 
 - **Human-friendly table**: Formatted table with stale PRs and orphaned branches
+- **Closed/Merged PR branches**: Separate section showing branches that still exist after PR closure/merge
 - **Detailed information**: Repository, type (Stale PR/Orphaned Branch), item name, user/author, age, and direct link
 - **Easy to read**: Perfect for manual review and sharing with team members
 - **Includes summary**: Still shows the standard summary statistics
@@ -233,8 +256,119 @@ The Markdown report includes:
 The Markdown file can be:
 - Viewed directly in GitHub with proper formatting
 - Shared with team members via email or chat
+- Automatically uploaded to Discord via GitHub Actions
 - Converted to PDF or other formats
 - Included in documentation or reports
+
+## Cleanup Operations
+
+### Delete Orphaned Branches (`make dbr`)
+
+Deletes all branches that don't have open PRs (excluding default and protected branches):
+
+```bash
+make dbr
+```
+
+**What it does:**
+- Scans all repositories for orphaned branches
+- Excludes default branches (main, master, etc.)
+- Excludes protected branches
+- Prompts for confirmation before deletion
+- Shows real-time deletion status for each branch
+
+**⚠️ Warning:** This is a destructive operation. Deleted branches cannot be recovered unless you have local copies.
+
+### Close Stale PRs (`make dpr`)
+
+Closes all pull requests that exceed the configured threshold:
+
+```bash
+make dpr
+```
+
+**What it does:**
+- Identifies PRs older than `OLD_PR_THRESHOLD_DAYS`
+- Prompts for confirmation before closing
+- Closes PRs with status update
+- Shows real-time closure status for each PR
+
+**Note:** Closed PRs can be reopened if needed.
+
+### Auto-Delete Closed/Merged PR Branches
+
+Set the `DELETE_ORPHANED_BRANCHES` environment variable to automatically delete branches with closed or merged PRs during scanning:
+
+```bash
+DELETE_ORPHANED_BRANCHES=true make scan
+```
+
+**What it does:**
+- Automatically deletes branches whose PRs have been closed or merged
+- Runs during normal scan operation
+- No confirmation prompt (use with caution)
+- Useful for automated cleanup in CI/CD pipelines
+
+### Closed/Merged PR Branches Section
+
+The report now includes a dedicated section for branches that still exist even though their PRs have been closed or merged:
+- **Branch name**: The name of the branch that should be deleted
+- **PR number and link**: Direct link to the closed/merged PR
+- **User**: Who created the PR
+- **Status**: Whether the PR was merged (🟣) or just closed (🔴)
+- **Days since closed**: How long ago the PR was closed
+- **Recommendation**: These branches are safe to delete
+
+## GitHub Actions Workflow
+
+The repository includes a GitHub Actions workflow that:
+- Automatically scans organizations on push to `scan` branch
+- Can be triggered manually with custom organization and threshold
+- Generates Markdown reports with pretty formatting
+- Uploads reports to Discord webhook automatically
+- Saves reports as GitHub Actions artifacts (30-day retention)
+
+### Workflow Triggers
+
+1. **Push to `scan` branch**: Automatically runs the scan
+2. **Manual trigger**: Run from GitHub Actions UI with custom inputs
+
+### Discord Integration
+
+The workflow automatically uploads the generated Markdown report to Discord:
+- Report is posted as a file attachment
+- Includes organization name in the message
+- Webhook URL is configured in the workflow file
+
+## Command-Line Options
+
+The scanner supports the following command-line flags:
+
+```bash
+python scanner.py [OPTIONS]
+
+Options:
+  -p, --pretty              Output human-friendly table format
+  --delete-branches         Delete all orphaned branches
+  --delete-prs             Close all stale PRs exceeding threshold
+  -h, --help               Show help message
+```
+
+**Examples:**
+
+```bash
+# Generate pretty report
+python scanner.py --pretty
+
+# Delete orphaned branches (with warning)
+python scanner.py --delete-branches
+
+# Close stale PRs (with warning)
+python scanner.py --delete-prs
+
+# Combine operations
+python scanner.py --pretty --delete-branches
+```
 
 ## Security
 
@@ -244,14 +378,46 @@ The Markdown file can be:
 - **Environment variables**: Secure credential management
 - **Local reports**: Reports saved to mounted volume only
 - **No data persistence**: No data stored in container
+- **Deletion safeguards**: Confirmation prompts for destructive operations
+- **Protected branches**: Never deletes default or protected branches
 
 ## Performance
 
 - **Optimized API calls**: Reduced API requests for better performance
 - **Pagination handling**: Automatic handling of large datasets
 - **Progress indicators**: Real-time feedback for long-running scans
-- **Error handling**: Graceful handling of API failures
+- **Error handling**: Graceful handling of API failures with automatic retry
+- **403 Error Retry**: Automatic 5-second delay and retry for transient access errors
 - **Rate limit aware**: Respects GitHub API rate limits
+- **Batch operations**: Efficient deletion of multiple branches/PRs
+- **Smart filtering**: Early exclusion of archived and inactive repositories
+
+## Best Practices
+
+### Before Running Cleanup Operations
+
+1. **Run a scan first**: Always run `make scan` or `make pretty` to see what will be affected
+2. **Review the report**: Check the generated report to understand what will be deleted
+3. **Backup important branches**: Ensure you have local copies of any branches you might need
+4. **Test on a single repo**: Use `GITHUB_REPO=test-repo make dbr` to test on one repository first
+5. **Use in CI/CD carefully**: Only enable `DELETE_ORPHANED_BRANCHES=true` if you're confident in the logic
+
+### Recommended Workflow
+
+```bash
+# 1. Scan and review
+make pretty
+
+# 2. Review the Markdown report
+cat reports/scan_*.md
+
+# 3. If satisfied, run cleanup
+make dbr  # Delete orphaned branches
+make dpr  # Close stale PRs
+
+# 4. Verify results
+make pretty
+```
 
 ## Troubleshooting
 
@@ -269,3 +435,19 @@ The Markdown file can be:
 
 - Ensure your GitHub token has access to all repositories in the organization
 - Private repositories require `repo` scope, public repositories need `public_repo`
+
+### Deletion Failures
+
+- Ensure your token has `repo` scope (not just `public_repo`)
+- Protected branches cannot be deleted (this is intentional)
+- Standard branches (main, staging, dev, prod, etc.) are automatically excluded
+- Archived repositories are skipped entirely (read-only)
+- Check that branches still exist before attempting deletion
+- Verify organization permissions allow branch deletion
+
+### 403 Errors During Scan
+
+- The scanner automatically retries 403 errors after a 5-second delay
+- Transient 403 errors are common during rapid API requests and are handled automatically
+- Persistent 403 errors are silently skipped (usually archived repos or permission issues)
+- Check rate limit status if you see many 403 errors: `curl -H "Authorization: token YOUR_TOKEN" https://api.github.com/rate_limit`
