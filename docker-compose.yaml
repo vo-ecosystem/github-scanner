@@ -10,6 +10,7 @@ services:
       - GITHUB_ORG=${GITHUB_ORG}
       - OLD_PR_THRESHOLD_DAYS=${OLD_PR_THRESHOLD_DAYS}
       - GITHUB_REPO=${GITHUB_REPO}
+      - DELETE_ORPHANED_BRANCHES=${DELETE_ORPHANED_BRANCHES}
     volumes:
       - ./reports:/app/reports
     networks:
