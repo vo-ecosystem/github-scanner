@@ -1,7 +1,7 @@
 name: Repository Health Scan
 on:
-  schedule:
-    - cron: '0 1 * * 5'  # Run every Friday at 1 AM
+  # schedule:
+  #   - cron: '0 1 * * 5'  # Run every Friday at 1 AM
   workflow_dispatch:      # Manual trigger
     inputs:
       github_org:

@@ -282,13 +282,17 @@ class GitHubOrgScanner:
         }
         
         # Deduplicate by branch name (keep the most recent PR for each branch)
-        # Also exclude standard branches
+        # Also exclude standard branches and branches with open PRs
         branch_dict = {}
         for b in closed_merged_existing:
             branch_name = b['branch']
             
             # Skip standard branches
             if branch_name.lower() in standard_branches:
+                continue
+            
+            # Skip branches that are part of an open PR
+            if branch_name in open_pr_branches:
                 continue
                 
             if branch_name not in branch_dict:
